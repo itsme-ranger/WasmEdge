@@ -6204,3 +6204,112 @@ TEST(WasiTest, PointerAlignment) {
     }
   }
 }
+
+TEST(WasiTest, FdFdstatSetRights) {
+  WasmEdge::Host::WASI::Environ Env;
+  WasmEdge::Runtime::Instance::ModuleInstance Mod("");
+  Mod.addHostMemory(
+      "memory", std::make_unique<WasmEdge::Runtime::Instance::MemoryInstance>(
+                    WasmEdge::AST::MemoryType(1)));
+  auto *MemInstPtr = Mod.findMemoryExports("memory");
+  ASSERT_TRUE(MemInstPtr != nullptr);
+  auto &MemInst = *MemInstPtr;
+  WasmEdge::Runtime::CallingFrame CallFrame(nullptr, &Mod);
+
+  WasmEdge::Host::WasiPathOpen WasiPathOpen(Env);
+  WasmEdge::Host::WasiFdFdstatSetRights WasiFdFdstatSetRights(Env);
+  WasmEdge::Host::WasiFdClose WasiFdClose(Env);
+  std::array<WasmEdge::ValVariant, 1> Errno;
+
+  const auto TmpFileName = "wasi_rights_test.tmp"sv;
+  const uint32_t PathPtr = 0;
+  const uint32_t FdOutPtr = static_cast<uint32_t>(alignof(__wasi_fd_t) * 4);
+
+  // Open a file with write-only rights, then call fd_fdstat_set_rights with
+  // FD_READ. This used to return NOTCAPABLE; after removing the subset-only
+  // enforcement it must return SUCCESS (rights system deprecated in Preview 2).
+  {
+    Env.init({"/:."s}, "test"s, {}, {});
+    writeString(MemInst, TmpFileName, PathPtr);
+
+    EXPECT_TRUE(WasiPathOpen.run(
+        CallFrame,
+        std::initializer_list<WasmEdge::ValVariant>{
+            static_cast<int32_t>(3),
+            static_cast<uint32_t>(__WASI_LOOKUPFLAGS_SYMLINK_FOLLOW),
+            PathPtr,
+            static_cast<uint32_t>(TmpFileName.size()),
+            static_cast<uint32_t>(__WASI_OFLAGS_CREAT | __WASI_OFLAGS_TRUNC),
+            static_cast<uint64_t>(__WASI_RIGHTS_FD_WRITE | __WASI_RIGHTS_FD_SEEK |
+                                  __WASI_RIGHTS_FD_TELL |
+                                  __WASI_RIGHTS_FD_FILESTAT_GET),
+            static_cast<uint64_t>(0),
+            static_cast<uint32_t>(0),
+            FdOutPtr},
+        Errno));
+    EXPECT_EQ(Errno[0].get<int32_t>(), __WASI_ERRNO_SUCCESS);
+
+    int32_t FileFd;
+    EXPECT_TRUE((MemInst.loadValue(FileFd, FdOutPtr)));
+
+    EXPECT_TRUE(WasiFdFdstatSetRights.run(
+        CallFrame,
+        std::initializer_list<WasmEdge::ValVariant>{
+            FileFd, static_cast<uint64_t>(__WASI_RIGHTS_FD_READ),
+            static_cast<uint64_t>(0)},
+        Errno));
+    EXPECT_EQ(Errno[0].get<int32_t>(), __WASI_ERRNO_SUCCESS);
+
+    EXPECT_TRUE(WasiFdClose.run(
+        CallFrame,
+        std::initializer_list<WasmEdge::ValVariant>{FileFd}, Errno));
+
+    std::error_code Ec;
+    fs::remove(fs::u8path("wasi_rights_test.tmp"), Ec);
+    Env.fini();
+  }
+
+  // Reducing rights (subset) must also succeed.
+  {
+    Env.init({"/:."s}, "test"s, {}, {});
+    writeString(MemInst, TmpFileName, PathPtr);
+
+    const uint64_t FullRights =
+        __WASI_RIGHTS_FD_READ | __WASI_RIGHTS_FD_WRITE | __WASI_RIGHTS_FD_SEEK |
+        __WASI_RIGHTS_FD_TELL | __WASI_RIGHTS_FD_FILESTAT_GET;
+
+    EXPECT_TRUE(WasiPathOpen.run(
+        CallFrame,
+        std::initializer_list<WasmEdge::ValVariant>{
+            static_cast<int32_t>(3),
+            static_cast<uint32_t>(__WASI_LOOKUPFLAGS_SYMLINK_FOLLOW),
+            PathPtr,
+            static_cast<uint32_t>(TmpFileName.size()),
+            static_cast<uint32_t>(__WASI_OFLAGS_CREAT | __WASI_OFLAGS_TRUNC),
+            FullRights,
+            static_cast<uint64_t>(0),
+            static_cast<uint32_t>(0),
+            FdOutPtr},
+        Errno));
+    EXPECT_EQ(Errno[0].get<int32_t>(), __WASI_ERRNO_SUCCESS);
+
+    int32_t FileFd;
+    EXPECT_TRUE((MemInst.loadValue(FileFd, FdOutPtr)));
+
+    EXPECT_TRUE(WasiFdFdstatSetRights.run(
+        CallFrame,
+        std::initializer_list<WasmEdge::ValVariant>{
+            FileFd, static_cast<uint64_t>(__WASI_RIGHTS_FD_READ),
+            static_cast<uint64_t>(0)},
+        Errno));
+    EXPECT_EQ(Errno[0].get<int32_t>(), __WASI_ERRNO_SUCCESS);
+
+    EXPECT_TRUE(WasiFdClose.run(
+        CallFrame,
+        std::initializer_list<WasmEdge::ValVariant>{FileFd}, Errno));
+
+    std::error_code Ec;
+    fs::remove(fs::u8path("wasi_rights_test.tmp"), Ec);
+    Env.fini();
+  }
+}

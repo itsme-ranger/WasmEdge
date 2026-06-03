@@ -149,21 +149,14 @@ public:
 
   /// Adjust the rights associated with a file descriptor.
   ///
-  /// This can only be used to remove rights, and returns `errno::notcapable` if
-  /// called in a way that would attempt to add rights
-  ///
   /// @param[in] RightsBase The desired rights of the file descriptor.
   /// @param[in] RightsInheriting The desired rights of the file descriptor.
   /// @return Nothing or WASI error
   WasiExpect<void>
   fdFdstatSetRights(__wasi_rights_t RightsBase,
                     __wasi_rights_t RightsInheriting) noexcept {
-    if (!can(RightsBase, RightsInheriting)) {
-      return WasiUnexpect(__WASI_ERRNO_NOTCAPABLE);
-    }
     FsRightsBase = RightsBase;
     FsRightsInheriting = RightsInheriting;
-
     return {};
   }
 
